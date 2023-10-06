@@ -15,13 +15,6 @@ const api = {
   listenForLiveReplay: (cb: Function) => {
     ipcRenderer.on('live-replay-loaded', async (_event, args) => {
       const { liveGame, games } = args
-
-      liveGame.players = await Promise.all(
-        liveGame?.players.map(async (player) => {
-          player.rankedSeasons = await ipcRenderer.invoke('getRankedSeasons', player.connectCode)
-          return player
-        })
-      )
       cb(liveGame, games)
     })
   }

@@ -1,10 +1,12 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import createWorker from './worker?nodeWorker'
 import { availableParallelism } from 'os'
 import * as fs from 'fs'
+import { GameStartType, SlippiGame } from '@slippi/slippi-js'
+import chokidar from 'chokidar'
 
 const appDataPath = process.env['IS_TEST'] ? '' : app.getPath('appData')
 const db = require('better-sqlite3')(join(appDataPath, 'melee2.db'))
@@ -52,7 +54,7 @@ app.whenReady().then(() => {
   })
 
   win = createWindow()
-
+  watchForReplays()
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) win = createWindow()
   })
@@ -119,7 +121,7 @@ function startDatabaseLoad() {
 }
 
 function createWorkerThread(files: File[], appDataPath: string) {
-  createWorker({ workerData: { files, appDataPath } }).on('message', (message) => {
+  createWorker({ workerData: { files, appDataPath } }).on('message', () => {
     currentFileCount++
     win.webContents.send('database-game-loaded', { currentFileCount, maxFileCount })
     console.log(currentFileCount, maxFileCount)
@@ -198,7 +200,7 @@ function getNewReplayFiles(path: string) {
   return localFiles.filter((x) => !loadedFiles.includes(x.name))
 }
 
-ipcMain.handle('getRankedSeasons', async (event, connectCode) => {
+async function getRankedSeasons(connectCode: string) {
   const url = 'https://gql-gateway-dot-slippi.uc.r.appspot.com/graphql'
   const data = JSON.stringify({
     operationName: 'AccountManagementPageQuery',
@@ -221,9 +223,61 @@ ipcMain.handle('getRankedSeasons', async (event, connectCode) => {
   const text = await result.text()
   const json = JSON.parse(text)
   return json.data.getConnectCode.user.netplayProfiles
-})
+}
 
 declare type File = {
   path: string
   name: string
+}
+
+function watchForReplays() {
+  const settingsStmt = db.prepare('SELECT value FROM settings WHERE key = ?').pluck()
+  const replayDir: string = settingsStmt.get('replayDirectory')
+  let currentPath: string
+  // const replayDir = 'D:\\JacobProjects\\melee-stat-final\\testFolder'
+  const gamesStmt = db.prepare(`SELECT * FROM games
+  INNER JOIN players p1 ON games.id = p1.gameId
+  INNER JOIN players p2 on games.id = p2.gameId
+  WHERE p1.connectCode = @connectCode1
+  AND p2.connectCode = @connectCode2`)
+
+  chokidar.watch(replayDir, { ignoreInitial: true }).on('add', async (path) => {
+    if (!path || !path?.endsWith('.slp') || currentPath === path) return
+    try {
+      const game = new SlippiGame(path)
+      const settings = game.getSettings()
+      if (!settings) return
+      const connectCodes = settings?.players?.map((x) => x.connectCode)
+      if (!connectCodes) return
+      const games = gamesStmt.all({ connectCode1: connectCodes[0], connectCode2: connectCodes[1] })
+      const liveGame = {
+        players: getPlayers(settings),
+        stage: settings.stageId
+      }
+      liveGame.players = await Promise.all(
+        liveGame?.players.map(async (player) => {
+          player.rankedSeasons = await getRankedSeasons(player.connectCode)
+          return player
+        })
+      )
+      win?.webContents.send('live-replay-loaded', { liveGame, games })
+      currentPath = path
+    } catch (e) {
+      console.error('failed', e)
+      return
+    }
+  })
+}
+
+function getPlayers(settings: GameStartType) {
+  return settings.players.map((player) => {
+    {
+      return {
+        connectCode: player.connectCode,
+        characterId: player.characterId,
+        displayName: player.displayName,
+        rankedSeasons: null
+      }
+    }
+  })
 }

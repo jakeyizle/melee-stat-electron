@@ -16,7 +16,7 @@ export const App = ({}: AppProps) => {
   const [games, setGames] = useState<HistoricalGame[]>()
 
   useEffect(() => {
-    window.api.listenForGameLoad((currentCount, maxCount) => {
+    window.api.listenForGameLoad((currentCount: number, maxCount: number) => {
       console.log(currentCount, maxCount)
       setLoadCount(currentCount)
       setMaxCount(maxCount)
@@ -27,7 +27,7 @@ export const App = ({}: AppProps) => {
   }, [])
 
   useEffect(() => {
-    window.api.listenForLiveReplay((liveGame, games) => {
+    window.api.listenForLiveReplay((liveGame: LiveGame, games: HistoricalGame[]) => {
       setLiveGame(liveGame)
       setGames(games)
     })
@@ -63,7 +63,6 @@ export const App = ({}: AppProps) => {
 
   function renderHistoricalGames() {
     if (!games) return
-    console.log(games)
     return (
       <>
         <br />
@@ -76,15 +75,13 @@ export const App = ({}: AppProps) => {
   }
   return (
     <>
-    <ProgressBar {...{ currentCount, maxCount }}></ProgressBar>
+      <ProgressBar {...{ currentCount, maxCount }}></ProgressBar>
       {!liveGame ? (
         <Typography>Waiting for game...</Typography>
       ) : (
         <>
           <Grid container spacing={0}>
-            <Grid xs={12}>
-
-            </Grid>
+            <Grid xs={12}></Grid>
             <Grid xs={12} justifyContent={'center'} alignItems={'center'} textAlign={'center'}>
               <Typography level="title-lg">Current Game</Typography>
             </Grid>
