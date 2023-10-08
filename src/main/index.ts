@@ -95,7 +95,8 @@ function initDB() {
   db.prepare(
     `CREATE TABLE IF NOT EXISTS badGames (
     name NOT NULL,
-    path NOT NULL
+    path NOT NULL,
+    reason NOT NULL
   )`
   ).run()
 }
@@ -119,12 +120,17 @@ function startDatabaseLoad() {
     createWorkerThread(fileList, appDataPath)
   })
 }
-
+let timesArray: any = [];
 function createWorkerThread(files: File[], appDataPath: string) {
-  createWorker({ workerData: { files, appDataPath } }).on('message', () => {
+  const start = Date.now()
+  createWorker({ workerData: { files, appDataPath } }).on('message', (times: any[]) => {
     currentFileCount++
     win.webContents.send('database-game-loaded', { currentFileCount, maxFileCount })
-    console.log(currentFileCount, maxFileCount)
+    timesArray.push(times);
+    if (currentFileCount === maxFileCount) {
+      fs.writeFileSync('D:\\JacobProjects\\melee-stats-experimental\\tests\\results.json', JSON.stringify(timesArray))
+      console.log(`dbLoad time - ${Date.now() - start}`);
+    }
   })
 }
 
@@ -232,41 +238,54 @@ declare type File = {
 
 function watchForReplays() {
   const settingsStmt = db.prepare('SELECT value FROM settings WHERE key = ?').pluck()
-  const replayDir: string = settingsStmt.get('replayDirectory')
-  let currentPath: string
-  // const replayDir = 'D:\\JacobProjects\\melee-stat-final\\testFolder'
-  const gamesStmt = db.prepare(`SELECT * FROM games
-  INNER JOIN players p1 ON games.id = p1.gameId
-  INNER JOIN players p2 on games.id = p2.gameId
-  WHERE p1.connectCode = @connectCode1
-  AND p2.connectCode = @connectCode2`)
+  // const replayDir: string = settingsStmt.get('replayDirectory')
+  let currentPath: string | undefined
+  const replayDir = 'D:\\JacobProjects\\melee-stats-experimental\\testFolder'
 
+  //event emitting is different real life vs test
   chokidar.watch(replayDir, { ignoreInitial: true }).on('add', async (path) => {
+    console.log('add', path)
     if (!path || !path?.endsWith('.slp') || currentPath === path) return
-    try {
-      const game = new SlippiGame(path)
-      const settings = game.getSettings()
-      if (!settings) return
-      const connectCodes = settings?.players?.map((x) => x.connectCode)
-      if (!connectCodes) return
-      const games = gamesStmt.all({ connectCode1: connectCodes[0], connectCode2: connectCodes[1] })
-      const liveGame = {
-        players: getPlayers(settings),
-        stage: settings.stageId
-      }
-      liveGame.players = await Promise.all(
-        liveGame?.players.map(async (player) => {
-          player.rankedSeasons = await getRankedSeasons(player.connectCode)
-          return player
-        })
-      )
-      win?.webContents.send('live-replay-loaded', { liveGame, games })
-      currentPath = path
-    } catch (e) {
-      console.error('failed', e)
-      return
-    }
+    currentPath = await processGame(path);
   })
+
+  chokidar.watch(replayDir).on('change', async (path) => {
+    console.log('change', path)
+    if (!path || !path?.endsWith('.slp') || currentPath === path) return
+    currentPath = await processGame(path);
+  })
+}
+
+async function processGame(path: string) {
+  try {
+    const gamesStmt = db.prepare(`SELECT * FROM games
+    INNER JOIN players p1 ON games.id = p1.gameId
+    INNER JOIN players p2 on games.id = p2.gameId
+    WHERE p1.connectCode = @connectCode1
+    AND p2.connectCode = @connectCode2`)
+    const game = new SlippiGame(path)
+    const settings = game.getSettings()
+    console.log(settings);
+    if (!settings) return
+    const connectCodes = settings?.players?.map((x) => x.connectCode)
+    if (!connectCodes) return
+    const games = gamesStmt.all({ connectCode1: connectCodes[0], connectCode2: connectCodes[1] })
+    const liveGame = {
+      players: getPlayers(settings),
+      stage: settings.stageId
+    }
+    liveGame.players = await Promise.all(
+      liveGame?.players.map(async (player) => {
+        player.rankedSeasons = await getRankedSeasons(player.connectCode)
+        return player
+      })
+    )
+    win?.webContents.send('live-replay-loaded', { liveGame, games })
+    return path
+  } catch (e) {
+    console.error('failed', e)
+    return
+  }
 }
 
 function getPlayers(settings: GameStartType) {
